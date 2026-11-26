@@ -1,0 +1,67 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build site
+        run: |
+          python3 << 'PY'
+          from pathlib import Path
+          import base64, tarfile, io, shutil
+          site = Path('_site')
+          if site.exists():
+              shutil.rmtree(site)
+          site.mkdir()
+          for name in ['index.html', 'sicher.html', 'capacities.html', 'robots.txt', '.nojekyll']:
+              src = Path(name)
+              if not src.is_file():
+                  raise SystemExit(f'missing {name}')
+              shutil.copy2(src, site / name)
+          parts = sorted(Path('.').glob('images.tar.gz.b64.part*'))
+          if not parts:
+              raise SystemExit('no images.tar.gz.b64.part* files found')
+          raw = base64.b64decode(''.join(p.read_text() for p in parts).encode('ascii'))
+          with tarfile.open(fileobj=io.BytesIO(raw), mode='r:gz') as tar:
+              for member in tar.getmembers():
+                  name = Path(member.name).name
+                  if not member.isfile() or name != member.name or name.startswith('.'):
+                      raise SystemExit(f'refusing unsafe tar member: {member.name}')
+                  member.name = name
+                  tar.extract(member, path=site)
+          files = [p for p in site.rglob('*') if p.is_file()]
+          print('parts', [p.name for p in parts])
+          print('extracted', len(files))
+          for p in sorted(files):
+              print(f'{p.stat().st_size:8d} {p.name}')
+          PY
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
